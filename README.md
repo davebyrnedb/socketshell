@@ -105,13 +105,7 @@ sudo ./install-agent.sh
 
 This will copy `agent.py` to `/etc/socketshell/`.
 
-### 3.b Register Agent to Controller
-
-```bash
-sudo python3 /etc/socketshell/agent.py --register --registration_token="YourSecretToken"
-```
-
-### 3.c Configure Agent
+### 3.b Configure Agent
 
 Modifying `agent.py` you will need to modify at least SERVER_URL. This is the WSS Server's FQDN and port configured earlier.
 
@@ -122,6 +116,12 @@ TOKEN_PATH = "/etc/socketshell/agent.token"
 GUID_PATH = "/etc/socketshell/agent.guid"
 PID_PATH = "/etc/socketshell/agent.pid"
 SHELL_START_DIR = None
+```
+
+### 3.c Register Agent to Controller
+
+```bash
+sudo python3 /etc/socketshell/agent.py --register --registration_token="YourSecretToken"
 ```
 
 ### 3.d Start Agent
@@ -136,7 +136,16 @@ NOTE: "registration_token" is defined within controller.py
 
 For all features to be available (many terminal operations require HTTPS and hence WSS (Secure Websockets)) you must host the frontend single HTML file on a suitable webserver on a valid FQDN with a valid SSL Certificate. The frontend HTML does not need to be local to the controller, but to avoid XSS limitations, it should be on the same domain as your WSS server address (controller websocket server). For simplicity, it is recommended to host the frontend on the same machine as the websocket controller server.
 
-### 5. Access Web Interface & Agent Operation
+### 5. Configure Frontend HTML/JS
+
+On lines 99-100, you will need to edit the FQDN and PORT of the websocket server/controller endpoint:
+
+```
+const serverIP = "[FQDN_OF_WSS_SERVER]";
+const serverPort = "[PORT_OF_WSS_SERVER]";
+```
+
+### 6. Access Web Interface & Agent Operation
 
 Open a browser to:
 
