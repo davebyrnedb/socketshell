@@ -225,7 +225,10 @@ MIT License – free to use, modify, and distribute.
 
 ---
 
-## ✍️ Credits
+## ✍️ Credits & Contact
 
 Built by [Dave Byrne](https://github.com/davebyrnedb)  
 Designed for individuals managing large secure Linux environments
+
+For bugs or feature requests, please use [GitHub Issues](https://github.com/davebyrnedb/socketshell/issues).  
+For direct contact, reach me at: **admin@dave-byrne.co.uk**
