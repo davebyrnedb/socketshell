@@ -4,6 +4,8 @@
 
 SocketShell is a multi reverse-shell style remote access system, websocket based python implementation, with a HTML/JS Xterm centralised controller frontend. Designed to allow a large number of remote linux agents to register and connect to a centralised controller, to be accessed & controlled from a single web frontend.
 
+![Connected to Agent Reverse Shell](https://github.com/user-attachments/assets/d3b40db8-b672-4965-96ae-5ab9726fed84)
+
 ---
 
 ## 🔧 Features
@@ -207,7 +209,11 @@ The whitelist control utility is useful for visualising which agents are whiteli
 
 ## 📸 Screenshots
 
-Coming soon :)
+![Frontend Idle](https://github.com/user-attachments/assets/48598ea9-aa21-4119-9b81-fb0ed10b71a5)
+
+![Connected to Agent Reverse Shell](https://github.com/user-attachments/assets/d3b40db8-b672-4965-96ae-5ab9726fed84)
+
+![Frontend Reconnection on Controller Loss](https://github.com/user-attachments/assets/df392b9c-ce64-4545-80a9-700ae6244e5f)
 
 ---
 
