@@ -1,0 +1,608 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Linux Remote Shell Controller</title>
+    <link rel="stylesheet" href="https://unpkg.com/xterm/css/xterm.css" />
+    <script src="https://unpkg.com/xterm/lib/xterm.js"></script>
+    <script src="https://unpkg.com/xterm-addon-fit/lib/xterm-addon-fit.js"></script>
+    <style>
+        body { margin: 0; background: #000; color: #ccc; font-family: monospace; height: 100vh; overflow: hidden; display: flex; flex-direction: column; }
+        #main { display: flex; flex-grow: 1; overflow: hidden; }
+        #terminal { flex-grow: 1; min-width: 0; width: 100%; }
+        #terminal:focus { outline: none; }
+        #file-browser { width: 250px; flex-shrink: 0; background: #111; padding: 10px; overflow-y: auto; border-left: 1px solid #444; }
+        #agent-picker {display:flex; align-items:center; justify-content:space-between; padding:10px; background:#111; gap:10px;}
+        #agent-buttons { display: flex; gap: 10px; overflow-x: auto; flex-grow: 1; height: 60px; }
+        #client-panel {width: 250px; flex-shrink: 0; background: #111; color: #ccc; padding: 10px; overflow-y: auto; border-right: 1px solid #444; transition: width 0.3s ease;}
+        #client-panel.collapsed {width: 30px;}
+        #client-panel-header {cursor: pointer; background: #222; padding: 5px; font-weight: bold; text-align: center; user-select: none;}
+        #client-list {margin-top: 10px;}
+        #reconnect-status {font-size:14px; margin-top:10px; text-align:center;}
+        #overlay {display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:#000c; color:#fff; font-size:20px; display:flex; align-items:center; justify-content:center; z-index:1000;}
+        #agent-controls-cont {display:flex; gap:10px; align-items:center;}
+        #agent-search {width:180px; padding:4px 8px; background:#222; border:1px solid #555; color:#ccc; font-family:monospace; height:30px;}
+        #info-upload-wrapper {margin-bottom:10px;}
+        #system-info-ui {margin-bottom:10px;}
+        #clear-search {position:absolute; right:8px; top:50%; transform:translateY(-50%); cursor:pointer; color:#888;}
+        body::-webkit-scrollbar, #terminal::-webkit-scrollbar, #file-browser::-webkit-scrollbar, #client-panel::-webkit-scrollbar, #agent-buttons::-webkit-scrollbar { width: 8px; height: 8px; background-color: #111; }
+        body::-webkit-scrollbar-thumb, #terminal::-webkit-scrollbar-thumb, #file-browser::-webkit-scrollbar-thumb, #client-panel::-webkit-scrollbar-thumb, #agent-buttons::-webkit-scrollbar-thumb { background-color: #444; border-radius: 4px; }
+        body::-webkit-scrollbar-thumb:hover, #terminal::-webkit-scrollbar-thumb:hover, #file-browser::-webkit-scrollbar-thumb:hover, #client-panel::-webkit-scrollbar-thumb:hover, #agent-buttons::-webkit-scrollbar-thumb:hover { background-color: #666; }
+        body, #terminal, #file-browser, #client-panel, #agent-buttons { scrollbar-color: #444 #111; scrollbar-width: thin; }
+        .upload-here-button {background:#222; border:1px solid #444; color:#ccc; font-family:monospace; font-size:13px; padding:4px 10px; cursor:pointer;}
+        .upload-here-button:hover {background: #333;}
+        .disconnect-button { background: #800; color: #fff; border: 1px solid #a00; padding: 5px 10px; cursor: pointer; font-family: monospace; white-space: nowrap; height:30px;}
+        .disconnect-button:hover { background: #a00; }
+        .agent-button { background: #333; color: #ccc; border: 1px solid #444; padding: 5px 10px; cursor: pointer; position: relative; font-family: monospace; width: 140px; height: 45px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; line-height: 1.2; flex-shrink: 0; }
+        .agent-button::before { content: ""; width: 8px; height: 8px; background-color: #666; border-radius: 50%; position: absolute; left: 8px; top: 8px; }
+        .agent-button.connected::before { background-color: #00ff00; }
+        .agent-button:hover { background: #555; }
+        .file-entry { display: flex; align-items: center; position: relative; overflow: hidden; padding-right: 20px; }
+        .file-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex-grow: 1; }
+        .folder-name { cursor: pointer; }
+        .file-entry button { background: none; border: none; color: #ccc; cursor: pointer; font-family: monospace; }
+        .file-download { display: none; color: #0af; position: absolute; right: 0; top: 50%; transform: translateY(-50%); }
+        .file-entry:hover .file-download { display: inline; }
+    </style>
+</head>
+<body>
+<div id="overlay">
+    <div>
+        <div style="text-align:center;">🔌 Controller connection lost...</div>
+        <div id="reconnect-status">Reconnecting...</div>
+    </div>
+</div>
+<div id="agent-picker">
+    <div id="agent-buttons"></div>
+    <div id="agent-controls-cont">
+        <div style="position: relative; display: inline-block;">
+            <input id="agent-search" type="text" placeholder="Search agents...">
+            <span id="clear-search">×</span>
+        </div>
+        <button id="disconnect-button" class="disconnect-button">Disconnect</button>
+    </div>
+</div>
+<div id="main">
+    <div id="terminal" ontenteditable="true"></div>
+    <div id="file-browser">
+        <div id="info-upload-wrapper">
+            <div id="system-info-ui"></div>
+            <div id="upload-ui"></div>
+        </div>
+        <div id="file-list" style="margin-top:10px;"></div>
+    </div>
+</div>
+<script>
+document.getElementById('disconnect-button').onclick = disconnectAgent;
+
+const fileDownloadBuffer = {};
+
+const term = new Terminal({
+    cursorBlink: true,
+    fontFamily: 'monospace',
+    fontSize: 14,
+    theme: {
+        background: '#000000',
+        foreground: '#CCCCCC'
+    }
+});
+const fitAddon = new FitAddon.FitAddon();
+term.loadAddon(fitAddon);
+
+term.open(document.getElementById('terminal'));
+setTimeout(() => {
+    fitAddon.fit();
+    sendResize();
+}, 100);
+
+let ws;
+const serverIP = "[FQDN_OF_WSS_SERVER]";
+const serverPort = "[PORT_OF_WSS_SERVER]";
+connectWebSocket();
+
+let connectedAgent = null;
+let latestAgents = [];
+let hasPromptedToConnect = false;
+let currentBrowsePath = "/";
+let isDisconnected = false;
+let currentUpload = null;
+let reconnectAttempts = 0;
+
+//disable right click context menu in terminal
+document.getElementById('terminal').addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+});
+
+//copy text on highlight in terminal
+term.onSelectionChange(() => {
+    const selectedText = term.getSelection();
+    if (selectedText) {
+        navigator.clipboard.writeText(selectedText).catch(err => {
+            console.error("Failed to copy to clipboard", err);
+        });
+    }
+});
+
+//paste on right click in terminal
+document.getElementById('terminal').addEventListener('mouseup', async (e) => {
+    if (e.button === 2) {
+        try {
+            const text = await navigator.clipboard.readText();
+            if (text) {
+                if (ws.readyState === WebSocket.OPEN && connectedAgent) {
+                    ws.send(JSON.stringify({
+                        type: "input",
+                        data: text
+                    }));
+                }
+            }
+        } catch (err) {
+            console.error("Failed to paste from clipboard", err);
+        }
+    }
+});
+
+//clear the search box contents and re-render list-agents
+document.getElementById('clear-search').addEventListener('click', function() {
+    const search = document.getElementById('agent-search');
+    search.value = '';
+    renderAgentButtons(latestAgents);
+    search.focus();
+});
+
+//send resize jsaon payload to controller
+function sendResize() {
+    if (ws.readyState === WebSocket.OPEN && connectedAgent) {
+        ws.send(JSON.stringify({
+            type: "resize",
+            cols: term.cols,
+            rows: term.rows
+        }));
+    }
+}
+
+function connectToAgent(agentId) {
+    if (ws.readyState === WebSocket.OPEN) {
+        isDisconnected = false;
+
+        if (connectedAgent) {
+            //clean up the previous agent, if exists, before connecting
+            ws.send(JSON.stringify({
+                type: "signal",
+                signal: "disconnect_cleanup",
+                reason: "agent_switch"
+            }));
+        }
+
+        connectedAgent = agentId;
+        hasPromptedToConnect = false;
+        term.reset();
+        term.writeln("[*] Connecting to agent: " + agentId);
+        term.focus();
+        ws.send(JSON.stringify({"type": "connect_agent", "agent_id": agentId}));
+        sendResize();
+        if (ws.readyState === WebSocket.OPEN && connectedAgent === agentId) {
+            ws.send(JSON.stringify({"type": "input", "data": "clear\n"}));
+        }
+        browsePath("/");
+        renderAgentButtons(latestAgents);
+    }
+}
+
+function disconnectAgent() {
+    if (ws.readyState === WebSocket.OPEN && connectedAgent) {
+        ws.send(JSON.stringify({
+            type: "signal",
+            signal: "disconnect_cleanup"
+        }));
+    }
+    isDisconnected = true;
+    setTimeout(() => {
+        connectedAgent = null;
+        hasPromptedToConnect = false;
+        term.reset();
+        term.writeln("                                                             _   _");
+        term.writeln("    ____             _        _   ____  _          _ _      | | | |");
+        term.writeln("   / ___|  ___   ___| | _____| |_/ ___|| |__   ___| | |    _|_|_|_|_");
+        term.writeln("   \\___ \\ / _ \\ / __| |/ / _ \\ __\\___ \\| '_ \\ / _ \\ | |   (   [ ]   )");
+        term.writeln("    ___) | (_) | (__|   <  __/ |_ ___) | | | |  __/ | |    \\ /   \\ /");
+        term.writeln("   |____/ \\___/ \\___|_|\\_\\___|\\__|____/|_| |_|\\___|_|_|     |_ _ _|");
+        term.writeln("                                                              )  )");
+        term.writeln("                                      Dave Byrne - v1.0      (  (");
+        term.writeln(" ");
+        term.writeln(" ");
+        term.writeln(" [socketshell]~ Disconnected. Select an agent to establish remote shell");
+        term.writeln(" ");
+        renderAgentButtons(latestAgents);
+        document.getElementById('file-list').innerHTML = "";
+        document.getElementById('upload-ui').innerHTML = "";
+        document.getElementById('system-info-ui').innerHTML = "";
+    }, 200);
+}
+
+function renderAgentButtons(agents) {
+    const buttonsContainer = document.getElementById('agent-buttons');
+    buttonsContainer.innerHTML = "";
+    agents.forEach(agent => {
+        const btn = document.createElement('button');
+        btn.className = 'agent-button';
+        if (connectedAgent === agent.agent_id) {
+            btn.classList.add('connected');
+        }
+        btn.innerText = agent.hostname;
+        btn.title = agent.hostname;
+        btn.onclick = () => connectToAgent(agent.agent_id);
+        buttonsContainer.appendChild(btn);
+    });
+    const disconnectBtn = document.createElement('button');
+    disconnectBtn.className = 'disconnect-button';
+    disconnectBtn.innerText = 'Disconnect';
+    disconnectBtn.onclick = disconnectAgent;
+}
+
+document.getElementById('agent-search').addEventListener('input', function() {
+    const query = this.value.toLowerCase();
+    const filtered = latestAgents.filter(agent =>
+        agent.hostname.toLowerCase().includes(query)
+    );
+    renderAgentButtons(filtered);
+});
+
+function browsePath(path) {
+    if (ws.readyState === WebSocket.OPEN && connectedAgent) {
+        ws.send(JSON.stringify({
+            "type": "list_dir",
+            "path": path
+        }));
+        currentBrowsePath = path;
+    }
+}
+
+function downloadFile(filePath) {
+    if (ws.readyState === WebSocket.OPEN && connectedAgent) {
+        ws.send(JSON.stringify({
+            "type": "download_file",
+            "path": filePath
+        }));
+    }
+}
+
+function renderFileList(path, entries) {
+    const fileList = document.getElementById('file-list');
+    const uploadSection = document.getElementById('upload-section');
+    let parentPath = path.split('/').slice(0, -1).join('/');
+    if (parentPath === '') parentPath = '/';
+
+    const sysInfo = latestAgents.find(a => a.agent_id === connectedAgent)?.metadata || {};
+    let diskUsed = sysInfo.disk_root_gb?.used;
+    let diskTotal = sysInfo.disk_root_gb?.total;
+    let diskPercent = null;
+    let diskBarHTML = '';
+    if (typeof diskUsed === 'number' && typeof diskTotal === 'number' && diskTotal > 0) {
+        diskPercent = Math.round((diskUsed / diskTotal) * 100);
+        diskBarHTML = `
+            <div style="width:100%; background:#222; height:10px; border:1px solid #444; margin:4px 0;">
+                <div style="width:${diskPercent}%; background:#0af; height:100%;"></div>
+            </div>
+            <div style="font-size:12px;">${diskPercent}% used (${diskUsed} / ${diskTotal} GB)</div>
+        `;
+    } else {
+        diskBarHTML = `<div style="font-size:12px;">Disk info not available</div>`;
+    }
+    document.getElementById('system-info-ui').innerHTML = `
+        <div style="color:#aaa; font-size:13px;">
+            OS: ${sysInfo.os || 'N/A'}<br>
+            Kernel: ${sysInfo.kernel || 'N/A'}<br>
+            Uptime: ${sysInfo.uptime || 'N/A'}<br>
+            CPU Cores: ${sysInfo.cpu_cores || 'N/A'}<br>
+            RAM: ${sysInfo.ram_gb || 'N/A'} GB<br>
+            <br>
+            Disk /:<br>
+            ${diskBarHTML}
+            <br><br>
+            <em>Agent Ver: ${sysInfo.version || 'N/A'}</em><br><br>
+        </div>`;
+
+    fileList.innerHTML = `
+    <div style="display: flex; justify-content: space-between; align-items: center;">
+        <b>Path: </b><input id="path-input" value="${path}"
+            style="background:none; border:none; color:#ccc; font-family:monospace; font-size:14px; width:90%; outline:none;"
+            onkeydown="if(event.key==='Enter'){browsePath(this.value.trim())}"
+            onclick="this.select()" />
+        <button title="Refresh" onclick="browsePath(document.getElementById('path-input').value.trim())"
+            style="background:none; border:none; color:#0af; cursor:pointer; font-size:16px;">🔄</button>
+    </div>
+    <ul style="list-style:none; padding-left:10px;">` +
+        `<li style="margin:5px 0;">
+            <div class="file-entry">
+                <div class="file-name folder-name" onclick="browsePath('${parentPath}')">📁 ..</div>
+            </div>
+        </li>` +
+        entries.map(entry => {
+            const icon = entry.is_dir ? "📁" : "📄";
+            const newPath = (path.endsWith("/") ? path : path + "/") + entry.name;
+            if (entry.is_dir) {
+                return `<li style="margin:2px 0;">
+                            <div class="file-entry">
+                                <div class="file-name folder-name" onclick="browsePath('${newPath}')">${icon} ${entry.name}</div>
+                            </div>
+                        </li>`;
+            } else {
+                return `<li style="margin:2px 0;">
+                            <div class="file-entry">
+                                <div class="file-name">${icon} ${entry.name}</div>
+                                <button class="file-download" title="Download ${entry.name}" onclick="downloadFile('${newPath}')">💾</button>
+                            </div>
+                        </li>`;
+            }
+        }).join("") + `</ul>`;
+
+        document.getElementById('upload-ui').innerHTML = `
+            <button onclick="triggerUpload()" class="upload-here-button">⬆️ Upload here..</button>
+            <input type="file" id="fileInput" style="display:none" onchange="handleFileSelected(event)">
+            <div id="uploadProgress" style="margin-top:5px; font-size:12px;"></div>
+            <div id="downloadProgress" style="margin-top:5px; font-size:12px;"></div>`;
+}
+
+function triggerUpload() {
+    document.getElementById('fileInput').click();
+}
+
+function handleFileSelected(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+    uploadFile(file);
+}
+
+function uploadFile(file) {
+    const chunkSize = 512 * 1024;
+    const totalChunks = Math.ceil(file.size / chunkSize);
+
+    currentUpload = {
+        file,
+        chunkSize,
+        totalChunks,
+        offset: 0,
+        index: 0
+    };
+
+    ws.send(JSON.stringify({
+        type: "upload_start",
+        path: currentBrowsePath,
+        filename: file.name,
+        total_size: file.size
+    }));
+
+    document.getElementById('uploadProgress').innerText = "Starting upload...";
+}
+
+function sendNextChunk() {
+    const { file, chunkSize, offset, index, totalChunks } = currentUpload;
+
+    if (!currentUpload) {
+        console.warn("sendNextChunk called, but currentUpload is null");
+        return;
+    }
+    console.log(`Sending chunk ${currentUpload.index + 1}/${currentUpload.totalChunks}`);
+
+    if (offset >= file.size) {
+        ws.send(JSON.stringify({
+            type: "upload_done",
+            filename: file.name
+        }));
+        document.getElementById('uploadProgress').innerText = "Upload sent. Waiting for agent confirmation...";
+        return;
+    }
+
+    const slice = file.slice(offset, offset + chunkSize);
+    const reader = new FileReader();
+    reader.onload = function(evt) {
+        ws.send(evt.target.result);
+    };
+    reader.readAsArrayBuffer(slice);
+}
+
+window.addEventListener('resize', () => {
+    fitAddon.fit();
+    sendResize();
+});
+
+function connectWebSocket() {
+    ws = new WebSocket("wss://" + serverIP + ":" + serverPort + "/browser");
+
+        ws.onopen = function() {
+                console.log("Websocket connected :)")
+                reconnectAttempts = 0;
+                document.getElementById('overlay').style.display = "none";
+
+                term.reset();
+
+                ws.send(JSON.stringify({"type": "list_agents"}));
+
+                term.writeln("                                                             _   _");
+                term.writeln("    ____             _        _   ____  _          _ _      | | | |");
+                term.writeln("   / ___|  ___   ___| | _____| |_/ ___|| |__   ___| | |    _|_|_|_|_");
+                term.writeln("   \\___ \\ / _ \\ / __| |/ / _ \\ __\\___ \\| '_ \\ / _ \\ | |   (   [ ]   )");
+                term.writeln("    ___) | (_) | (__|   <  __/ |_ ___) | | | |  __/ | |    \\ /   \\ /");
+                term.writeln("   |____/ \\___/ \\___|_|\\_\\___|\\__|____/|_| |_|\\___|_|_|     |_ _ _|");
+                term.writeln("                                                              )  )");
+                term.writeln("                                      Dave Byrne - v1.0      (  (");
+                term.writeln(" ");
+                term.writeln(" ");
+                term.writeln(" [socketshell]~ Select an agent to establish remote shell");
+                term.writeln(" ");
+                hasPromptedToConnect = true;
+
+                setInterval(() => {
+                        if (ws.readyState === WebSocket.OPEN) {
+                                ws.send(JSON.stringify({"type": "list_agents"}));
+                        }
+                }, 5000);
+        };
+
+
+        ws.onmessage = function(event) {
+                let payload;
+                try {
+                        payload = JSON.parse(event.data);
+                } catch (e) {
+                        term.write(event.data);
+                        return;
+                }
+
+                if (payload.type === "agent_list") {
+                    latestAgents = payload.agents || [];
+
+                    const searchInput = document.getElementById('agent-search');
+                    const query = searchInput.value.toLowerCase();
+                    const filtered = latestAgents.filter(agent =>
+                        agent.hostname.toLowerCase().includes(query)
+                    );
+
+                    renderAgentButtons(filtered);
+
+                    if (!connectedAgent && !hasPromptedToConnect) {
+                        hasPromptedToConnect = true;
+                    }
+
+                    if (latestAgents.length === 0) {
+                        const buttonsContainer = document.getElementById('agent-buttons');
+                        buttonsContainer.innerHTML = "<span style='color:#888;'>No agents available.</span>";
+                    }
+                } else if (payload.type === "output") {
+                        if (isDisconnected) return;
+                        term.write(payload.data);
+                } else if (payload.type === "dir_listing") {
+                        if (payload.error) {
+                                alert("Error: " + payload.error);
+                        } else {
+                                renderFileList(payload.path, payload.entries);
+                        }
+                } else if (payload.type === "file_download") {
+                        const byteCharacters = atob(payload.data);
+                        const byteNumbers = new Array(byteCharacters.length);
+                        for (let i = 0; i < byteCharacters.length; i++) {
+                                byteNumbers[i] = byteCharacters.charCodeAt(i);
+                        }
+                        const byteArray = new Uint8Array(byteNumbers);
+                        const blob = new Blob([byteArray]);
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = payload.filename || "download.dat";
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
+                        URL.revokeObjectURL(url);
+                } else if (payload.type === "file_chunk") {
+                        const { filename, index, total, data } = payload;
+                        if (!fileDownloadBuffer[filename]) {
+                                fileDownloadBuffer[filename] = {
+                                        chunks: new Array(total),
+                                        received: 0,
+                                        total: total
+                                };
+                        }
+                        const buffer = fileDownloadBuffer[filename];
+                        buffer.chunks[index] = data;
+                        buffer.received++;
+                        const percent = Math.round((buffer.received / buffer.total) * 100);
+                        document.getElementById('downloadProgress').innerText = `Downloading ${filename}: ${percent}%`;
+                } else if (payload.type === "file_done") {
+                        const { filename } = payload;
+
+                        let buffer = fileDownloadBuffer[filename];
+
+                        if (!buffer) {
+                                const normalize = s => s.trim().toLowerCase();
+                                const matchKey = Object.keys(fileDownloadBuffer).find(k => normalize(k) === normalize(filename));
+                                if (matchKey) buffer = fileDownloadBuffer[matchKey];
+                        }
+                        if (!buffer || buffer.received !== buffer.total) {
+                                alert("Download incomplete or corrupted.");
+                                return;
+                        }
+
+                        //decode and concatenate chunks
+                        const binaryData = buffer.chunks.map(b64 => {
+                                const byteChars = atob(b64);
+                                const byteArray = new Uint8Array(byteChars.length);
+                                for (let i = 0; i < byteChars.length; i++) {
+                                        byteArray[i] = byteChars.charCodeAt(i);
+                                }
+                                return byteArray;
+                        });
+
+                        const blob = new Blob(binaryData);
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = filename;
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
+                        URL.revokeObjectURL(url);
+
+                        document.getElementById('downloadProgress').innerText = "Download complete.";
+                        setTimeout(() => {
+                                document.getElementById('downloadProgress').innerText = "";
+                        }, 5000);
+
+                        delete fileDownloadBuffer[filename];
+                } else if (payload.type === "upload_ack") {
+                        if (currentUpload?.file?.name === payload.filename) {
+                                sendNextChunk();
+                        } else {
+                                console.warn("upload_ack received, but no matching currentUpload found");
+                        }
+                } else if (payload.type === "upload_complete") {
+                        document.getElementById('uploadProgress').innerText = `Upload complete. Hash verified: ${payload.md5 || 'n/a'}`;
+                        currentUpload = null;
+                        setTimeout(() => {
+                                browsePath(currentBrowsePath);
+                        }, 500);
+                } else if (payload.type === "upload_chunk_ack") {
+                        if (!currentUpload) return;
+
+                        currentUpload.offset += currentUpload.chunkSize;
+                        currentUpload.index++;
+
+                        const progress = Math.round((currentUpload.index / currentUpload.totalChunks) * 100);
+                        document.getElementById('uploadProgress').innerText = `Uploading: ${progress}%`;
+
+                        sendNextChunk();
+                } else if (payload.type === "agent_disconnect") {
+                        if (connectedAgent === payload.agent_id) {
+                        term.writeln("\r\n[!] Agent disconnected. Session terminated.\r\n");
+                        disconnectAgent();
+                        }
+                }
+        };
+
+    ws.onclose = function() {
+        document.getElementById('overlay').style.display = "flex";
+        document.getElementById('reconnect-status').innerText = "Reconnecting...";
+        attemptReconnect();
+    };
+}
+
+function attemptReconnect() {
+    reconnectAttempts++;
+    const delay = Math.min(10000, 1000 * reconnectAttempts);
+
+    document.getElementById('reconnect-status').innerText = `Reconnecting in ${delay / 1000}s...`;
+    setTimeout(() => {
+        connectWebSocket();
+    }, delay);
+}
+
+term.onData(function(data) {
+    if (ws.readyState === WebSocket.OPEN && connectedAgent) {
+        ws.send(JSON.stringify({"type": "input", "data": data}));
+    }
+});
+
+</script>
+<textarea id="hiddenPaste" style="position: absolute; left: -9999px; top: -9999px;"></textarea>
+</body>
+</html>
